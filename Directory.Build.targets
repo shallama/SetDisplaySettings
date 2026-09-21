@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <Target Name="UpdateAssemblyInfo" BeforeTargets="CoreCompile"
+            Condition="'$(MSBuildProjectExtension)' != '.vcxproj' AND '$(MSBuildProjectExtension)' != '.wixproj'">
+      <ItemGroup>
+        <_CompiledAssemblyInfo Include="@(Compile)" Condition="'%(Filename)' == 'AssemblyInfo'" />
+      </ItemGroup>
+    
+      <Error Condition="'@(_CompiledAssemblyInfo)' == ''"
+             Text="Project '$(MSBuildProjectName)' does not include an AssemblyInfo file in its compilation." />
+
+      <UpdateAssemblyInfo
+          ProjectDir="$(ProjectDir)"
+          Company="$(Company)"
+          Product="$(Product)"
+          Copyright="$(Copyright)"
+          Trademark="$(Trademark)"
+          AssemblyVersion="$(AssemblyVersion)"
+          FileVersion="$(FileVersion)" />
+    </Target>
+    
+    <Target Name="StrongNameAssembly"
+            AfterTargets="CopyFilesToOutputDirectory"
+            BeforeTargets="PostBuildEvent"
+            Condition="'$(SignAssembly)' == 'true' AND '$(DelaySign)' == 'true' AND '$(MSBuildProjectExtension)' != '.vcxproj' AND '$(MSBuildProjectExtension)' != '.wixproj' AND Exists('$(TargetPath)')">
+      <Exec Command='"$(SN_DIR)\sn.exe" "$(SN_Option)" "$(TargetPath)" "$(SN_ContainerName)"' />
+    </Target>
+    
+    <Target Name="SignAndTimestamp"
+            AfterTargets="Build"
+            DependsOnTargets="StrongNameAssembly"
+            Condition="'$(SignAndTimestampAssemblies)' == 'true' AND '$(TargetPath)' != '' AND Exists('$(TargetPath)') AND ('$(TargetExt.ToLower())' == '.dll' OR '$(TargetExt.ToLower())' == '.exe' OR '$(TargetExt.ToLower())' == '.msi')">
+      <Message Text="Signing and Timestamping $(TargetFileName)" Importance="high" />
+      <Exec Command='"$(SIGNTOOL_DIR)\signtool.exe" sign /fd "$(SIGNTOOL_FileDigestAlgorithm)" /s "$(SIGNTOOL_ContainerName)" /n "$(SIGNTOOL_Subject)" /sm /tr "$(SIGNTOOL_TimestampServer)" /td $(SIGNTOOL_TimestampDigestAlgorithm) "$(TargetPath)"' />
+    </Target>
+    
+    <UsingTask TaskName="UpdateAssemblyInfo"
+               TaskFactory="RoslynCodeTaskFactory"
+               AssemblyFile="$(MSBuildBinPath)\Microsoft.Build.Tasks.Core.dll">
+      <ParameterGroup>
+      <ProjectDir           ParameterType="System.String" Required="true" />
+      <Company              ParameterType="System.String" Required="true" />
+      <Product              ParameterType="System.String" Required="true" />
+      <Copyright            ParameterType="System.String" Required="true" />
+      <Trademark            ParameterType="System.String" Required="true" />
+      <AssemblyVersion      ParameterType="System.String" Required="true" />
+      <FileVersion          ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.Collections.Generic" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Linq" />
+      <Using Namespace="System.Text" />
+      <Using Namespace="System.Text.RegularExpressions" />
+      <Using Namespace="System.Xml.Linq" />
+      <Code Type="Fragment" Language="cs">
+        <![CDATA[
+        var defaultAttributes = new Dictionary<string, string>
+        {
+            { "AssemblyTitle",                Product },
+            { "AssemblyDescription",          "" },
+            { "AssemblyConfiguration",        "" },
+            { "AssemblyCompany",              Company },
+            { "AssemblyProduct",              Product },
+            { "AssemblyCopyright",            Copyright },
+            { "AssemblyTrademark",            Trademark },
+            { "AssemblyCulture",              "" },
+            { "AssemblyVersion",              AssemblyVersion },
+            { "AssemblyFileVersion",          FileVersion },
+        };
+
+        var attributeRegex = new Regex(@"^\s*[\[\<aA]+ssembly:\s+(\w+)(?:Attribute)*\(""([^""]*)");
+
+        foreach (var file in Directory.GetFiles(ProjectDir, "AssemblyInfo.*", SearchOption.AllDirectories))
+        {
+            if (file.IndexOf("\\Infrastructure\\OpenSource\\", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                continue;
+            }
+
+
+            var missingAttributes = new Dictionary<string, string>(defaultAttributes);
+            var updatedLines = new List<string>();
+            foreach (var line in File.ReadAllLines(file))
+            {
+                var match = attributeRegex.Match(line);
+                if (match.Success)
+                {
+                    var attributeName = match.Groups[1].Value.Replace("Attribute", "");
+                    if (defaultAttributes.TryGetValue(attributeName, out var attributeValue))
+                    {
+                        updatedLines.Add(line.Replace("\"" + match.Groups[2].Value + "\"", "\"" + attributeValue + "\""));
+                        missingAttributes.Remove(attributeName);
+                        continue;
+                    }
+                }
+                updatedLines.Add(line);
+            }
+
+            var extension = Path.GetExtension(file).ToLower();
+            foreach (var entry in missingAttributes)
+            {
+                if (extension == ".vb")
+                {
+                    updatedLines.Add("<Assembly: " + entry.Key + "(\"" + entry.Value + "\")>");
+                }
+                else
+                {
+                    updatedLines.Add("[assembly: " + entry.Key + "(\"" + entry.Value + "\")]");
+                }
+            }
+
+            File.WriteAllText(file, string.Join(Environment.NewLine, updatedLines) + Environment.NewLine, Encoding.UTF8);
+            Log.LogMessage(MessageImportance.High, "Updated AssemblyInfo: " + file);
+        }
+      ]]>
+      </Code>
+    </Task>
+    </UsingTask>
+</Project>

@@ -1,1 +1,1 @@
-# SetDisplaySettings
+# Applying display settings
